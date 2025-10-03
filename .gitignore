@@ -8,3 +8,7 @@ stress_test.py
 test_multi_file_upload.py
 /webdev反代
 test_multimodal_request.py
+
+# Dashboard
+dashboard_data.json
+.env

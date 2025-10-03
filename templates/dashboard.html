@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Noni Proxy Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="title">Noni Proxy Dashboard</h1>
+            <p class="subtitle">Check Your API Token Usage</p>
+        </header>
+
+        <div class="section">
+            <h2 class="section-title">Enter Your API Token</h2>
+            <div class="token-checker">
+                <input type="text" id="tokenInput" placeholder="Enter your API token" class="token-input">
+                <button onclick="checkToken()" class="btn btn-primary">Check Usage</button>
+            </div>
+            <div id="tokenInfo" class="token-info hidden"></div>
+        </div>
+
+        <div id="statsSection" class="hidden">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-content">
+                        <div class="stat-value" id="statRequests">0</div>
+                        <div class="stat-label">Total Requests</div>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-content">
+                        <div class="stat-value" id="statTokens">0</div>
+                        <div class="stat-label">Total Tokens</div>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-content">
+                        <div class="stat-value" id="statIPs">0</div>
+                        <div class="stat-label">Unique IPs</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">Usage Timeline (Last 7 Days)</h2>
+                <div class="chart-container">
+                    <canvas id="usageChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <p>Noni Proxy Dashboard &copy; 2025</p>
+        </footer>
+    </div>
+
+    <script>
+        let usageChart = null;
+
+        // Load usage timeline chart for specific token
+        async function loadUsageChart(token) {
+            try {
+                const response = await fetch(`/api/usage/timeline?days=7&token=${encodeURIComponent(token)}`);
+                const data = await response.json();
+                
+                // Destroy existing chart if it exists
+                if (usageChart) {
+                    usageChart.destroy();
+                }
+                
+                const ctx = document.getElementById('usageChart').getContext('2d');
+                usageChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.map(d => d.date),
+                        datasets: [{
+                            label: 'Requests',
+                            data: data.map(d => d.requests),
+                            borderColor: '#e74c3c',
+                            backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }, {
+                            label: 'Tokens',
+                            data: data.map(d => d.tokens),
+                            borderColor: '#9b59b6',
+                            backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                            tension: 0.4,
+                            fill: true,
+                            yAxisID: 'y1'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false,
+                        },
+                        plugins: {
+                            legend: {
+                                labels: {
+                                    color: '#ecf0f1'
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: { color: '#95a5a6' },
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' }
+                            },
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                ticks: { color: '#e74c3c' },
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                ticks: { color: '#9b59b6' },
+                                grid: { drawOnChartArea: false }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error loading chart:', error);
+            }
+        }
+
+        // Check token information
+        async function checkToken() {
+            const token = document.getElementById('tokenInput').value.trim();
+            const infoDiv = document.getElementById('tokenInfo');
+            const statsSection = document.getElementById('statsSection');
+            
+            if (!token) {
+                infoDiv.innerHTML = '<p class="error">Please enter a token</p>';
+                infoDiv.classList.remove('hidden');
+                statsSection.classList.add('hidden');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/token/${encodeURIComponent(token)}/info`);
+                
+                if (!response.ok) {
+                    throw new Error('Token not found');
+                }
+                
+                const data = await response.json();
+                
+                const lastUsed = data.last_used ? new Date(data.last_used).toLocaleString() : 'Never';
+                const createdAt = new Date(data.created_at).toLocaleString();
+                const status = data.is_active ? '<span class="status-active">Active</span>' : '<span class="status-inactive">Inactive</span>';
+                
+                infoDiv.innerHTML = `
+                    <div class="token-details">
+                        <h3>Token Information</h3>
+                        <div class="detail-row">
+                            <span class="detail-label">Status:</span>
+                            <span class="detail-value">${status}</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Created:</span>
+                            <span class="detail-value">${createdAt}</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Last Used:</span>
+                            <span class="detail-value">${lastUsed}</span>
+                        </div>
+                    </div>
+                `;
+                infoDiv.classList.remove('hidden');
+                
+                // Update stats cards
+                document.getElementById('statRequests').textContent = data.usage_stats.total_requests.toLocaleString();
+                document.getElementById('statTokens').textContent = data.usage_stats.total_tokens.toLocaleString();
+                document.getElementById('statIPs').textContent = data.usage_stats.ip_addresses.length;
+                
+                // Show stats section and load chart
+                statsSection.classList.remove('hidden');
+                await loadUsageChart(token);
+                
+            } catch (error) {
+                infoDiv.innerHTML = '<p class="error">Token not found or invalid</p>';
+                infoDiv.classList.remove('hidden');
+                statsSection.classList.add('hidden');
+            }
+        }
+
+        // Allow Enter key to submit
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('tokenInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    checkToken();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

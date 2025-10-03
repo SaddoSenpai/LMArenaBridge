@@ -1,5 +1,5 @@
 # api_server.py
-# 新一代 LMArena Bridge 后端服务
+# 新一代 Noni Proxy 后端服务
 
 import asyncio
 import json
@@ -23,13 +23,22 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 
-# --- 内部模块导入 ---
-from modules.file_uploader import upload_to_file_bed
-
-
 # --- 基础配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# --- 内部模块导入 ---
+from modules.file_uploader import upload_to_file_bed
+
+# --- Dashboard 集成 ---
+try:
+    from database import DashboardDatabase
+    dashboard_db = DashboardDatabase()
+    DASHBOARD_ENABLED = True
+    logger.info("✅ Dashboard database integration enabled")
+except ImportError:
+    DASHBOARD_ENABLED = False
+    logger.warning("⚠️ Dashboard database not available - usage tracking disabled")
 
 # --- 全局状态与配置 ---
 CONFIG = {} # 存储从 config.jsonc 加载的配置
@@ -667,7 +676,7 @@ def format_openai_finish_chunk(model: str, request_id: str, reason: str = 'stop'
 
 def format_openai_error_chunk(error_message: str, model: str, request_id: str) -> str:
     """格式化为 OpenAI 错误块。"""
-    content = f"\n\n[LMArena Bridge Error]: {error_message}"
+    content = f"\n\n[Noni Proxy Error]: {error_message}"
     return format_openai_chunk(content, model, request_id)
 
 def format_openai_non_stream_response(content: str, model: str, request_id: str, reason: str = 'stop') -> dict:
@@ -858,7 +867,7 @@ async def non_stream_response(request_id: str, model: str):
 
             error_response = {
                 "error": {
-                    "message": f"[LMArena Bridge Error]: {data}",
+                    "message": f"[Noni Proxy Error]: {data}",
                     "type": "bridge_error",
                     "code": "attachment_too_large" if status_code == 413 else "processing_error"
                 }
@@ -1018,22 +1027,41 @@ async def chat_completions(request: Request):
 
     # 如果不是图像模型，则执行正常的文本生成逻辑
     load_config()  # 实时加载最新配置，确保会话ID等信息是最新的
-    # --- API Key 验证 ---
-    api_key = CONFIG.get("api_key")
-    if api_key:
+    
+    # --- Dashboard Token 验证 ---
+    user_token = None
+    if DASHBOARD_ENABLED:
+        # Dashboard enabled - require valid token
         auth_header = request.headers.get('Authorization')
         if not auth_header or not auth_header.startswith('Bearer '):
             raise HTTPException(
                 status_code=401,
-                detail="未提供 API Key。请在 Authorization 头部中以 'Bearer YOUR_KEY' 格式提供。"
+                detail="Dashboard is enabled. Please provide an API token in Authorization header as 'Bearer YOUR_TOKEN'"
             )
         
-        provided_key = auth_header.split(' ')[1]
-        if provided_key != api_key:
+        user_token = auth_header.split(' ')[1]
+        if not dashboard_db.validate_token(user_token):
             raise HTTPException(
                 status_code=401,
-                detail="提供的 API Key 不正确。"
+                detail="Invalid or inactive API token"
             )
+    else:
+        # Dashboard not enabled - use old API key validation if configured
+        api_key = CONFIG.get("api_key")
+        if api_key:
+            auth_header = request.headers.get('Authorization')
+            if not auth_header or not auth_header.startswith('Bearer '):
+                raise HTTPException(
+                    status_code=401,
+                    detail="未提供 API Key。请在 Authorization 头部中以 'Bearer YOUR_KEY' 格式提供。"
+                )
+            
+            provided_key = auth_header.split(' ')[1]
+            if provided_key != api_key:
+                raise HTTPException(
+                    status_code=401,
+                    detail="提供的 API Key 不正确。"
+                )
 
     # --- 增强的连接检查，解决人机验证后的竞态条件 ---
     if IS_REFRESHING_FOR_VERIFICATION and not browser_ws:
@@ -1171,6 +1199,18 @@ async def chat_completions(request: Request):
         # 4. 根据 stream 参数决定返回类型
         is_stream = openai_req.get("stream", False)
 
+        # Log usage if dashboard is enabled and token is provided
+        if DASHBOARD_ENABLED and user_token:
+            # Estimate token usage (rough approximation)
+            total_text = " ".join([msg.get("content", "") for msg in openai_req.get("messages", [])])
+            estimated_tokens = len(total_text) // 4
+            client_ip = request.client.host if request.client else "unknown"
+            
+            try:
+                dashboard_db.log_usage(user_token, model_name or "unknown", estimated_tokens, client_ip)
+            except Exception as e:
+                logger.warning(f"Failed to log usage to dashboard: {e}")
+
         if is_stream:
             # 返回流式响应
             return StreamingResponse(
@@ -1188,7 +1228,7 @@ async def chat_completions(request: Request):
         # 返回一个格式正确的JSON错误响应
         return JSONResponse(
             status_code=500,
-            content={"error": {"message": f"[LMArena Bridge Error] 附件处理失败: {e}", "type": "attachment_error"}}
+            content={"error": {"message": f"[Noni Proxy Error] 附件处理失败: {e}", "type": "attachment_error"}}
         )
     except Exception as e:
         # 捕获所有其他错误
@@ -1226,7 +1266,7 @@ async def start_id_capture():
 if __name__ == "__main__":
     # 建议从 config.jsonc 中读取端口，此处为临时硬编码
     api_port = 5102
-    logger.info(f"🚀 LMArena Bridge v2.0 API 服务器正在启动...")
+    logger.info(f"🚀 Noni Proxy v2.0 API 服务器正在启动...")
     logger.info(f"   - 监听地址: http://127.0.0.1:{api_port}")
     logger.info(f"   - WebSocket 端点: ws://127.0.0.1:{api_port}/ws")
     
